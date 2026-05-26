@@ -1,0 +1,57 @@
+[project]
+name = "airway"
+version = "0.1.0"
+description = "Bi-modal difficult airway prediction (face + ultrasound)"
+requires-python = "==3.11.*"
+
+# Pinned versions. Do NOT change these casually. If you change one,
+# re-run the full pipeline and confirm `make pilot-report` still works.
+dependencies = [
+    "numpy==1.26.4",
+    "pandas==2.2.2",
+    "scikit-learn==1.4.2",
+    "xgboost==2.0.3",
+    "shap==0.45.1",
+    "matplotlib==3.8.4",
+    "mlflow==2.13.0",
+    "dvc==3.51.2",
+    "librosa==0.10.2.post1",   # kept for v2 (voice), unused in v1
+    "pytest==8.2.1",
+    "pyarrow==16.1.0",         # fast parquet read/write
+    "opencv-python==4.9.0.80",
+    "pillow==10.3.0",
+    "joblib==1.4.2",
+]
+
+# PyTorch is installed SEPARATELY (see SETUP guide section 3) because the
+# correct build depends on whether you have an NVIDIA GPU.
+
+[project.optional-dependencies]
+dev = [
+    "ruff==0.4.8",
+    "black==24.4.2",
+    "pre-commit==3.7.1",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]   # errors, pyflakes, import-sort, warnings
+ignore = ["E501"]               # line length handled by black
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

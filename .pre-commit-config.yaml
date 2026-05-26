@@ -1,0 +1,27 @@
+# Pre-commit runs these checks automatically every time you `git commit`.
+# If a check fails, the commit is blocked until you fix it (or the tool
+# auto-fixes it and you re-add the files).
+#
+# Install once with:  pre-commit install
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.8
+    hooks:
+      - id: ruff               # lints; --fix auto-corrects what it can
+        args: [--fix]
+      - id: ruff-format        # not used; black is the formatter below
+
+  - repo: https://github.com/psf/black
+    rev: 24.4.2
+    hooks:
+      - id: black              # formats code to a consistent style
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-added-large-files
+        args: [--maxkb=5000]   # blocks accidentally committing big data files
+      - id: check-yaml
+      - id: check-merge-conflict
