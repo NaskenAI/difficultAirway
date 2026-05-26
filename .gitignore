@@ -1,0 +1,16 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# macOS
+.DS_Store
+
+# Generated data/reports
+data/raw/
+data/processed/
+reports/*.csv
+reports/*.png
+reports/*.parquet

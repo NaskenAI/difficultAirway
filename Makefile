@@ -1,39 +1,51 @@
-# Makefile — convenience commands. Run `make <target>` from the repo root.
-#
-# On Windows, `make` is not installed by default. Either:
-#   (a) install it via `choco install make` or use Git Bash, or
-#   (b) just run the commands after the colon manually.
+# Makefile -- convenience commands. Run `make <target>` from the repo root.
 
-.PHONY: help dummy test lint format check pilot-report clean
+.PHONY: help install dummy test lint format check features pilot-report clean
+
+PYTHON ?= python3
+SRC_PATH := src
 
 help:           ## Show this help
 	@echo "Available commands:"
+	@echo "  make install       - install project dependencies"
 	@echo "  make dummy         - generate fake data into data/raw/"
-	@echo "  make test          - run the test suite (pytest)"
-	@echo "  make lint          - check code style (ruff)"
-	@echo "  make format        - auto-format code (black)"
+	@echo "  make test          - run the test suite"
+	@echo "  make lint          - check code style"
+	@echo "  make format        - auto-format code"
 	@echo "  make check         - lint + test together"
+	@echo "  make features      - build face + ultrasound feature tables"
 	@echo "  make pilot-report  - run the full pipeline end-to-end"
-	@echo "  make clean         - remove caches and generated reports"
+	@echo "  make clean         - remove caches and generated outputs"
+
+install:        ## Install common dependencies
+	$(PYTHON) -m pip install --upgrade pip
+	$(PYTHON) -m pip install numpy pandas scikit-learn torch torchvision matplotlib pytest ruff black opencv-python pyarrow
 
 dummy:          ## Generate dummy data
-	python -m airway.make_dummy_data
+	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m airway.make_dummy_data
 
 test:           ## Run all tests
-	pytest
+	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m pytest
 
 lint:           ## Check style without changing files
-	ruff check src tests
+	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m ruff check src tests
 
 format:         ## Auto-format the code
-	black src tests
-	ruff check --fix src tests
+	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m black src tests
+	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m ruff check --fix src tests
 
 check: lint test  ## Lint and test in one go
 
-pilot-report:   ## Run the whole pipeline (Week 2 fills this in properly)
-	python -m airway.pilot_report
+features:       ## Build the face and ultrasound feature tables
+	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m airway.face_features
+	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m airway.ultrasound_features
+
+pilot-report: features   ## Run the whole pipeline end-to-end
+	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m airway.baseline_model
+	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m airway.pilot_report
 
 clean:          ## Remove caches and generated outputs
-	rm -rf .pytest_cache .ruff_cache **/__pycache__ src/**/__pycache__
+	rm -rf .pytest_cache .ruff_cache
+	find . -type d -name "__pycache__" -exec rm -rf {} +
 	rm -rf reports/*.csv reports/*.png
+	rm -rf data/processed/*.parquet	rm -rf data/processed/*.parquet
