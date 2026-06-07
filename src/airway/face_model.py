@@ -93,9 +93,18 @@ MODELS = {
 
 
 def cross_validate(feature_table: pd.DataFrame, patient_table: pd.DataFrame,
-                   feature_cols: list[str], model_name: str) -> CVResult:
-    """Run patient-level 5x2 CV for one classifier and return pooled metrics."""
-    factory = MODELS[model_name]
+                   feature_cols: list[str], model_name: str,
+                   models: dict | None = None,
+                   modality_prefix: str = "face") -> CVResult:
+    """
+    Run patient-level 5x2 CV for one classifier and return pooled metrics.
+
+    Reusable across modalities: pass a `models` registry (name -> factory(y_train))
+    and a `modality_prefix` (e.g. "ultrasound"). Defaults to the face MODELS so
+    existing face callers are unchanged.
+    """
+    models = MODELS if models is None else models
+    factory = models[model_name]
     data = feature_table.merge(
         patient_table[[config.ID_COL, config.LABEL_COL]],
         on=config.ID_COL, how="inner")
@@ -126,7 +135,7 @@ def cross_validate(feature_table: pd.DataFrame, patient_table: pd.DataFrame,
                   if len(np.unique(oof_true_arr)) == 2 else float("nan"))
     m = _classification_metrics(oof_true_arr, oof_prob_arr)
     return CVResult(
-        modality=f"face:{model_name}",
+        modality=f"{modality_prefix}:{model_name}",
         n_patients=len(data), n_features=len(feature_cols),
         auc_mean=float(np.mean(per_fold_auc)) if per_fold_auc else pooled_auc,
         auc_std=float(np.std(per_fold_auc)) if per_fold_auc else 0.0,
@@ -136,16 +145,19 @@ def cross_validate(feature_table: pd.DataFrame, patient_table: pd.DataFrame,
     )
 
 
-def _fit_final_model(model_name: str, data: pd.DataFrame, feature_cols: list[str]):
+def _fit_final_model(model_name: str, data: pd.DataFrame, feature_cols: list[str],
+                     models: dict | None = None):
     """Refit a classifier on ALL patients — this is what we persist for reuse."""
+    models = MODELS if models is None else models
     x = data[feature_cols].to_numpy()
     y = data[config.LABEL_COL].to_numpy()
-    pipe = MODELS[model_name](y)
+    pipe = models[model_name](y)
     pipe.fit(x, y)
     return pipe
 
 
-def _save_roc(results: list[CVResult], out_path) -> None:
+def _save_roc(results: list[CVResult], out_path,
+              title: str = "Face model — pooled out-of-fold ROC") -> None:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -161,7 +173,7 @@ def _save_roc(results: list[CVResult], out_path) -> None:
     plt.plot([0, 1], [0, 1], "k--", linewidth=1, label="chance")
     plt.xlabel("False positive rate (1 - specificity)")
     plt.ylabel("True positive rate (sensitivity)")
-    plt.title("Face model — pooled out-of-fold ROC")
+    plt.title(title)
     plt.legend(loc="lower right")
     plt.tight_layout()
     plt.savefig(out_path, dpi=120)
