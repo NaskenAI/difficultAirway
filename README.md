@@ -13,6 +13,10 @@ point-of-care ultrasound measurements.
 - **Weeks 4–5 (done):** dlib eye-centred face crops (persisted, idempotent),
   persisted 512-d per-image embeddings → 1024-d per-patient features, and two
   face classifiers (L2 logistic regression + XGBoost) under patient-level 5×2 CV.
+- **Weeks 6–7 (done):** ultrasound feature cleaning/standardisation, safe
+  hyomental distance ratio, within-fold mean imputation, L2 logistic regression
+  + XGBoost under the same 5×2 CV, and permutation + XGBoost-gain feature
+  importance. Manuscript Methods + Results stubs in `docs/manuscript.md`.
 
 ## Quick start
 
@@ -97,6 +101,33 @@ The model path is `config.DLIB_LANDMARK_MODEL` (`models/…` by default, git-ign
 XGBoost needs the OpenMP runtime. If `import xgboost` fails with a `libomp.dylib`
 error, run `brew install libomp`.
 
+## Weeks 6–7 — ultrasound model
+
+```bash
+make us-clean     # clean + standardize ultrasound features
+                  #   -> data/processed/cleaned_ultrasound_features.csv
+make us-model     # train + 5x2 CV LogReg & XGBoost + feature importance
+make week67       # us-model (cleans features first)
+```
+
+`make us-model` writes:
+- `reports/us_cv_metrics.csv` — AUC, sensitivity, specificity, … per classifier
+- `reports/us_roc.png` — pooled out-of-fold ROC curves
+- `reports/us_feature_importance.csv` / `.png` — permutation + XGBoost gain importance
+- `reports/us_model.pkl` — both classifiers refit on all data + metadata
+- `data/processed/cleaned_ultrasound_features.csv` — the cleaned feature table
+
+- **Cleaning** coerces measurements to numeric (invalid/blank → missing),
+  applies the column aliases in `ultrasound_features.US_COLUMN_ALIASES`, adds
+  all-missing placeholders for absent schema columns, and computes the derived
+  **hyomental distance ratio** (extended ÷ neutral; zero/negative/missing
+  neutral → missing).
+- **Imputation is within-fold mean only** — fitted on the training fold inside
+  the sklearn pipeline, never on the full dataset before CV. Features that are
+  entirely missing across the cohort are dropped with a warning.
+- Same outcome (CL 3–4), same patient-level stratified 5×2 CV, and same class
+  weighting (`class_weight` / `scale_pos_weight`) as the face model.
+
 ## Assumptions (column names & paths)
 
 The code reads these names; rename your real columns to match **inside the
@@ -104,8 +135,12 @@ loaders**, not throughout the codebase:
 
 - **Outcome:** `cl_grade` (1–4); difficult = CL 3–4 → `label`. Optional second
   observer `cl_grade_obs2` enables inter-observer κ.
-- **Ultrasound** (`data/raw/ultrasound.csv`): `dstvc_mm`, `hmd_neutral_mm`,
-  `hmd_extended_mm`, `dse_mm` (+ derived `hmdr`).
+- **Ultrasound** (`data/raw/ultrasound.csv`): measured `dstvc_mm`,
+  `hmd_neutral_mm`, `hmd_extended_mm`, `dse_mm` (+ derived `hmdr`). Differently
+  named source columns can be mapped via `ultrasound_features.US_COLUMN_ALIASES`;
+  a schema column absent from the export becomes an all-missing placeholder
+  (warned), and is dropped from the model if entirely missing. Non-numeric/blank
+  values are coerced to missing and imputed within each CV fold (mean).
 - **Pre-op / demographics** (`data/raw/preop.csv`): `age_years`, `sex`, `bmi`,
   `mallampati_class`, `mouth_opening_mm`, `thyromental_mm`, `neck_movement_deg`,
   `jaw_subluxation`, `buck_teeth`, `obstructed_airway`, `weight_class`,

@@ -1,7 +1,8 @@
 # Makefile -- convenience commands. Run `make <target>` from the repo root.
 
 .PHONY: help install dummy test lint format check features pilot-report clean \
-        audit quarantine scores crops embeddings face-model week3 week45
+        audit quarantine scores crops embeddings face-model week3 week45 \
+        us-clean us-model week67
 
 PYTHON ?= python3
 SRC_PATH := src
@@ -26,6 +27,10 @@ help:           ## Show this help
 	@echo "  make embeddings    - 512-d per image + 1024-d per patient features"
 	@echo "  make face-model    - train + CV LogReg & XGBoost -> face_model.pkl"
 	@echo "  make week45        - crops + embeddings + face-model"
+	@echo "  --- Weeks 6-7 (ultrasound model) ---"
+	@echo "  make us-clean      - clean + standardize ultrasound features -> cleaned_ultrasound_features.csv"
+	@echo "  make us-model      - train + CV LogReg & XGBoost + importance -> us_model.pkl"
+	@echo "  make week67        - us-clean + us-model"
 	@echo "  make clean         - remove caches and generated outputs"
 
 install:        ## Install common dependencies
@@ -77,9 +82,17 @@ face-model:     ## Train + cross-validate LogReg & XGBoost face classifiers
 
 week45: crops embeddings face-model   ## Run the whole Weeks 4-5 face model
 
+us-clean:       ## Clean + standardize the ultrasound features
+	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m airway.ultrasound_features
+
+us-model:       ## Train + CV LogReg & XGBoost ultrasound classifiers + importance
+	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m airway.ultrasound_model
+
+week67: us-model   ## Run the whole Weeks 6-7 ultrasound model (cleans features first)
+
 clean:          ## Remove caches and generated outputs
 	rm -rf .pytest_cache .ruff_cache
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	rm -rf reports/*.csv reports/*.png reports/*.md reports/*.pkl
-	rm -rf data/processed/*.parquet data/processed/*.json
+	rm -rf data/processed/*.parquet data/processed/*.json data/processed/*.csv
 	rm -rf data/processed/face_crops
