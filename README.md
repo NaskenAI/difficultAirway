@@ -22,6 +22,12 @@ point-of-care ultrasound measurements.
   an unweighted-average baseline and a sanity check, clinical comparators
   (Mallampati/LEMON/Wilson) on the same folds, and DeLong tests with Bonferroni
   correction. Manuscript Tables 1–4 in `docs/manuscript.md`.
+- **Block D / Weeks 12–14 (coding done):** patient-level bootstrap 95% CIs,
+  descriptive subgroup analyses (BMI/age tertiles, surgery type) with
+  underpowered flags, SHAP explainability + per-case force plots, automatic
+  TP/TN/FP/FN case selection, FN/FP export tables for manual review, and a
+  data-freeze memo **template**. Clinical interpretation, the data-freeze
+  decision, repo tagging, and MLflow freezing are intentionally left to a human.
 
 ## Quick start
 
@@ -172,6 +178,45 @@ Notes:
   (both AUC = 1.00); the pipeline prints/persists a sanity-check **warning**
   rather than failing.
 
+## Block D / Weeks 12–14 — validation & explainability (coding only)
+
+Run **after** Block C (these steps read `reports/fusion_fold_predictions.csv`
+and `reports/fused_model.pkl`).
+
+```bash
+make bootstrap-ci      # patient-level bootstrap 95% CIs for all metrics
+make subgroups         # descriptive subgroup metrics + effect sizes
+make explainability    # SHAP summary + case selection + force plots
+make error-analysis    # FN / FP tables for manual review
+make data-freeze       # data-freeze memo TEMPLATE
+make block-d           # all five, in order
+```
+
+Outputs:
+- `reports/bootstrap_metric_cis.csv` — per model × metric: estimate, 95% CI,
+  valid-iteration count (1000 patient-level resamples, fixed seed)
+- `reports/subgroup_metrics.csv`, `reports/subgroup_effect_sizes.csv` —
+  descriptive only; small subgroups flagged `underpowered` (no hypothesis tests)
+- `reports/shap_summary_fused.png`, `reports/explainability_feature_summary.csv`
+  — SHAP on the fused inputs (falls back to standardised LR coefficients if SHAP
+  is unavailable)
+- `reports/explanation_case_selection.csv` — up to two each of TP/TN/FP/FN
+- `outputs/explainability/force_plots/*.png` — per-case SHAP force plots, or
+  `outputs/explainability/force_plot_notes.md` if they cannot be generated
+- `reports/false_negatives_for_manual_review.csv`,
+  `reports/false_positives_for_manual_review.csv` — full per-patient context
+- `reports/data_freeze_memo_TEMPLATE.md` — placeholders only; **not** a freeze
+
+Notes:
+- **SHAP is optional.** If `import shap` fails, the summary/force plots are
+  skipped, the feature summary falls back to standardised logistic coefficients,
+  and `force_plot_notes.md` records why — the pipeline never crashes.
+- **Patient-level units throughout:** the bootstrap resamples patients (not
+  rows/images); per-patient probabilities are averaged across the CV repeats.
+- This block is **coding/automation only** — it produces tables, plots, and a
+  template. It does **not** tag the repo, freeze MLflow runs, or make the
+  data-freeze decision.
+
 ## Assumptions (column names & paths)
 
 The code reads these names; rename your real columns to match **inside the
@@ -186,10 +231,12 @@ loaders**, not throughout the codebase:
   (warned), and is dropped from the model if entirely missing. Non-numeric/blank
   values are coerced to missing and imputed within each CV fold (mean).
 - **Pre-op / demographics** (`data/raw/preop.csv`): `age_years`, `sex`, `bmi`,
-  `mallampati_class`, `mouth_opening_mm`, `thyromental_mm`, `neck_movement_deg`,
-  `jaw_subluxation`, `buck_teeth`, `obstructed_airway`, `weight_class`,
-  `head_neck_class`, `receding_mandible`. Every pre-op column is optional — a
-  missing column makes the dependent score component `NaN` (never silently 0).
+  `surgery_type`, `mallampati_class`, `mouth_opening_mm`, `thyromental_mm`,
+  `neck_movement_deg`, `jaw_subluxation`, `buck_teeth`, `obstructed_airway`,
+  `weight_class`, `head_neck_class`, `receding_mandible`. Every pre-op column is
+  optional — a missing column makes the dependent score component `NaN` (never
+  silently 0). Block D subgroups use `bmi`/`age_years` (tertiles) and
+  `surgery_type` (categorical); absent columns are skipped with a message.
 - **Faces** (`data/raw/face_index.csv`): `study_id`, `view_code`, `file_path`
   (relative to `data/raw/face_images/`). Multiple images per patient.
 
