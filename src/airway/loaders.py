@@ -93,7 +93,47 @@ def label_loader() -> pd.DataFrame:
         dups = df.loc[df[config.ID_COL].duplicated(), config.ID_COL].tolist()
         raise ValueError(f"label_loader: duplicate study_id rows: {dups}")
 
-    return df[[config.ID_COL, config.CL_GRADE_COL, config.LABEL_COL]].reset_index(drop=True)
+    keep = [config.ID_COL, config.CL_GRADE_COL, config.LABEL_COL]
+    # Carry the second-observer grade through if it exists, so the audit can
+    # compute inter-observer kappa. It is optional — absence is not an error.
+    if config.CL_GRADE_OBS2_COL in df.columns:
+        keep.insert(2, config.CL_GRADE_OBS2_COL)
+        df[config.CL_GRADE_OBS2_COL] = df[config.CL_GRADE_OBS2_COL].astype("Int64")
+
+    return df[keep].reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# 1b. PRE-OP LOADER (demographics + airway exam fields)
+# ---------------------------------------------------------------------------
+def preop_loader() -> pd.DataFrame:
+    """
+    Read the pre-operative table: demographics + airway-exam findings.
+
+    Expected raw file (config.PREOP_CSV) is keyed by study_id and may contain
+    any of config.DEMOGRAPHIC_COLS and config.PREOP_COLS. Every column is
+    OPTIONAL — this loader does not invent data. It returns whatever is present,
+    one row per patient. Missing columns are simply absent from the result;
+    scores.py and data_audit.py both degrade gracefully when a column is absent.
+
+    Returns
+    -------
+    DataFrame, one row per patient, with study_id + whatever pre-op columns the
+    file actually contains. Returns an empty (id-only) frame if the file is
+    missing, so callers can treat "no pre-op data" uniformly.
+    """
+    if not config.PREOP_CSV.exists():
+        print(f"preop_loader: {config.PREOP_CSV} not found; returning id-only frame.")
+        return pd.DataFrame(columns=[config.ID_COL])
+
+    df = pd.read_csv(config.PREOP_CSV)
+    _check_id_column(df, "preop_loader")
+
+    if df[config.ID_COL].duplicated().any():
+        dups = df.loc[df[config.ID_COL].duplicated(), config.ID_COL].tolist()
+        raise ValueError(f"preop_loader: duplicate study_id rows: {dups}")
+
+    return df.reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------

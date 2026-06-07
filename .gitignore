@@ -14,3 +14,8 @@ data/processed/
 reports/*.csv
 reports/*.png
 reports/*.parquet
+reports/*.pkl
+reports/*.md
+
+# Large downloaded model weights (e.g. dlib 68-point landmarks, ~100MB)
+models/

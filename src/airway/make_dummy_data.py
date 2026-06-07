@@ -70,13 +70,53 @@ def main() -> None:
     # difficult airway rare (~20%), like real life
     cl_grades = rng.choice([1, 2, 3, 4], size=N_PATIENTS, p=[0.45, 0.35, 0.12, 0.08])
     is_difficult = np.isin(cl_grades, [3, 4])
+
+    # A second observer mostly agrees but disagrees by one grade ~25% of the
+    # time, so the audit's inter-observer kappa is high but not perfect.
+    noise = rng.choice([-1, 0, 1], size=N_PATIENTS, p=[0.12, 0.75, 0.13])
+    cl_obs2 = np.clip(cl_grades + noise, 1, 4)
+
     labels = pd.DataFrame({
         config.ID_COL: ids,
         config.CL_GRADE_COL: cl_grades,
+        config.CL_GRADE_OBS2_COL: cl_obs2,
         "ids_score": rng.integers(0, 12, size=N_PATIENTS),
     })
     labels.to_csv(config.LABELS_CSV, index=False)
     print(f"wrote {config.LABELS_CSV}  ({len(labels)} rows)")
+
+    # --- preop.csv : demographics + pre-op airway exam ---------------------
+    # Difficult airways are nudged toward worse exam findings so the computed
+    # Mallampati / LEMON / Wilson comparators carry real (if synthetic) signal.
+    d = is_difficult.astype(float)
+    sex = rng.choice(["M", "F"], size=N_PATIENTS, p=[0.55, 0.45])
+    bmi = (rng.normal(27, 4, N_PATIENTS) + 4.0 * d).round(1)
+    preop = pd.DataFrame({
+        config.ID_COL: ids,
+        "age_years": rng.integers(20, 80, size=N_PATIENTS),
+        "sex": sex,
+        "bmi": bmi,
+        # clinician Mallampati class: difficult patients skew toward 3-4
+        "mallampati_class": np.clip(
+            rng.choice([1, 2, 3, 4], size=N_PATIENTS, p=[0.35, 0.4, 0.18, 0.07])
+            + rng.integers(0, 2, size=N_PATIENTS) * is_difficult, 1, 4),
+        "mouth_opening_mm": (rng.normal(45, 6, N_PATIENTS) - 8.0 * d).round(0),
+        "thyromental_mm": (rng.normal(70, 8, N_PATIENTS) - 12.0 * d).round(0),
+        "neck_movement_deg": (rng.normal(90, 12, N_PATIENTS) - 20.0 * d).round(0),
+        "jaw_subluxation": (rng.random(N_PATIENTS) < (0.1 + 0.4 * d)).astype(int),
+        "buck_teeth": (rng.random(N_PATIENTS) < (0.1 + 0.25 * d)).astype(int),
+        "neck_circumference_cm": (rng.normal(38, 4, N_PATIENTS) + 5.0 * d).round(1),
+        "obstructed_airway": (rng.random(N_PATIENTS) < (0.05 + 0.2 * d)).astype(int),
+        # Wilson sub-scores (0/1/2 each), correlated with difficulty
+        "weight_class": np.clip(rng.integers(0, 2, N_PATIENTS) + (d).astype(int), 0, 2),
+        "head_neck_class": np.clip(rng.integers(0, 2, N_PATIENTS) + (d).astype(int), 0, 2),
+        "receding_mandible": np.clip(rng.integers(0, 2, N_PATIENTS) + (d * (rng.random(N_PATIENTS) < 0.5)).astype(int), 0, 2),
+    })
+    # leave a few realistic gaps so the missingness table is non-trivial
+    gap_idx = rng.choice(N_PATIENTS, size=max(1, N_PATIENTS // 12), replace=False)
+    preop.loc[gap_idx, "thyromental_mm"] = np.nan
+    preop.to_csv(config.PREOP_CSV, index=False)
+    print(f"wrote {config.PREOP_CSV}  ({len(preop)} rows)")
 
     # --- ultrasound.csv -----------------------------------------------------
     # shift difficult patients a little so the model has real signal
@@ -88,6 +128,10 @@ def main() -> None:
         "hmd_extended_mm": (rng.normal(55, 7, N_PATIENTS) - 3.0 * shift).round(1),
         "dse_mm": (rng.normal(27, 5, N_PATIENTS) + 2.0 * shift).round(1),
     })
+    # a couple of missing ultrasound readings so imputation rules have something
+    # to act on (quarantine.py imputes these inside cross-validation downstream)
+    us_gap = rng.choice(N_PATIENTS, size=max(1, N_PATIENTS // 15), replace=False)
+    ultrasound.loc[us_gap, "dse_mm"] = np.nan
     ultrasound.to_csv(config.ULTRASOUND_CSV, index=False)
     print(f"wrote {config.ULTRASOUND_CSV}  ({len(ultrasound)} rows)")
 
