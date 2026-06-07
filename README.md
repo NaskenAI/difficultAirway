@@ -13,6 +13,15 @@ point-of-care ultrasound measurements.
 - **Weeks 4–5 (done):** dlib eye-centred face crops (persisted, idempotent),
   persisted 512-d per-image embeddings → 1024-d per-patient features, and two
   face classifiers (L2 logistic regression + XGBoost) under patient-level 5×2 CV.
+- **Weeks 6–7 (done):** ultrasound feature cleaning/standardisation, safe
+  hyomental distance ratio, within-fold mean imputation, L2 logistic regression
+  + XGBoost under the same 5×2 CV, and permutation + XGBoost-gain feature
+  importance. Manuscript Methods + Results stubs in `docs/manuscript.md`.
+- **Block C / Weeks 8–11 (done):** within-fold isotonic calibration of each
+  modality (Brier + reliability plots), late fusion (logistic meta-learner) with
+  an unweighted-average baseline and a sanity check, clinical comparators
+  (Mallampati/LEMON/Wilson) on the same folds, and DeLong tests with Bonferroni
+  correction. Manuscript Tables 1–4 in `docs/manuscript.md`.
 
 ## Quick start
 
@@ -97,6 +106,72 @@ The model path is `config.DLIB_LANDMARK_MODEL` (`models/…` by default, git-ign
 XGBoost needs the OpenMP runtime. If `import xgboost` fails with a `libomp.dylib`
 error, run `brew install libomp`.
 
+## Weeks 6–7 — ultrasound model
+
+```bash
+make us-clean     # clean + standardize ultrasound features
+                  #   -> data/processed/cleaned_ultrasound_features.csv
+make us-model     # train + 5x2 CV LogReg & XGBoost + feature importance
+make week67       # us-model (cleans features first)
+```
+
+`make us-model` writes:
+- `reports/us_cv_metrics.csv` — AUC, sensitivity, specificity, … per classifier
+- `reports/us_roc.png` — pooled out-of-fold ROC curves
+- `reports/us_feature_importance.csv` / `.png` — permutation + XGBoost gain importance
+- `reports/us_model.pkl` — both classifiers refit on all data + metadata
+- `data/processed/cleaned_ultrasound_features.csv` — the cleaned feature table
+
+- **Cleaning** coerces measurements to numeric (invalid/blank → missing),
+  applies the column aliases in `ultrasound_features.US_COLUMN_ALIASES`, adds
+  all-missing placeholders for absent schema columns, and computes the derived
+  **hyomental distance ratio** (extended ÷ neutral; zero/negative/missing
+  neutral → missing).
+- **Imputation is within-fold mean only** — fitted on the training fold inside
+  the sklearn pipeline, never on the full dataset before CV. Features that are
+  entirely missing across the cohort are dropped with a warning.
+- Same outcome (CL 3–4), same patient-level stratified 5×2 CV, and same class
+  weighting (`class_weight` / `scale_pos_weight`) as the face model.
+
+## Block C / Weeks 8–11 — fusion & clinical comparison
+
+Run **after** the face features (`make week45`) exist; calibration rebuilds the
+cleaned ultrasound table itself.
+
+```bash
+make calibration          # isotonic-calibrate face & ultrasound (within-fold)
+make fusion               # logistic meta-learner + average baseline
+make clinical-comparison  # clinical baselines + DeLong tests
+make block-c              # all three, in order
+```
+
+Outputs (in `reports/`):
+- `calibrated_face_probs.csv`, `calibrated_us_probs.csv` — out-of-fold calibrated
+  probabilities, one row per patient per fold (`study_id, repeat, fold_index,
+  label, calibrated_prob`)
+- `calibration_metrics.csv` — Brier per fold + pooled; `face_calibration.png`,
+  `us_calibration.png` — reliability diagrams
+- `fused_model.pkl` — meta-learner refit on all OOF probs + metadata
+- `fusion_cv_metrics.csv`, `fusion_average_baseline_metrics.csv` — learned vs
+  average-baseline metrics; `fusion_roc.png`
+- `fusion_fold_predictions.csv` — per patient/fold: `face_prob, us_prob,
+  fused_prob, avg_prob, label`
+- `per_model_metrics.csv` — AUC + operating-point metrics for every model
+- `delong_comparisons.csv` — six DeLong tests (fused vs each comparator),
+  Bonferroni α = 0.0083
+
+Notes:
+- **Primary model per modality = L2 logistic regression** (calibrated); XGBoost
+  remains available in the standalone per-modality reports.
+- **No leakage:** one common cohort (face + ultrasound + label); folds generated
+  once and reused everywhere via the calibrated-prob fold membership. The
+  meta-learner trains only on training-fold calibrated probabilities.
+- Each step **fails clearly** if a prerequisite output is missing (e.g. fusion
+  requires the calibrated-prob CSVs).
+- On the synthetic data the learned fusion does not beat the average baseline
+  (both AUC = 1.00); the pipeline prints/persists a sanity-check **warning**
+  rather than failing.
+
 ## Assumptions (column names & paths)
 
 The code reads these names; rename your real columns to match **inside the
@@ -104,8 +179,12 @@ loaders**, not throughout the codebase:
 
 - **Outcome:** `cl_grade` (1–4); difficult = CL 3–4 → `label`. Optional second
   observer `cl_grade_obs2` enables inter-observer κ.
-- **Ultrasound** (`data/raw/ultrasound.csv`): `dstvc_mm`, `hmd_neutral_mm`,
-  `hmd_extended_mm`, `dse_mm` (+ derived `hmdr`).
+- **Ultrasound** (`data/raw/ultrasound.csv`): measured `dstvc_mm`,
+  `hmd_neutral_mm`, `hmd_extended_mm`, `dse_mm` (+ derived `hmdr`). Differently
+  named source columns can be mapped via `ultrasound_features.US_COLUMN_ALIASES`;
+  a schema column absent from the export becomes an all-missing placeholder
+  (warned), and is dropped from the model if entirely missing. Non-numeric/blank
+  values are coerced to missing and imputed within each CV fold (mean).
 - **Pre-op / demographics** (`data/raw/preop.csv`): `age_years`, `sex`, `bmi`,
   `mallampati_class`, `mouth_opening_mm`, `thyromental_mm`, `neck_movement_deg`,
   `jaw_subluxation`, `buck_teeth`, `obstructed_airway`, `weight_class`,

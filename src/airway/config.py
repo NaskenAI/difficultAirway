@@ -30,6 +30,7 @@ PROCESSED_DIR = DATA_DIR / "processed"
 FACE_CROPS_DIR = PROCESSED_DIR / "face_crops"
 FACE_EMBEDDINGS_PARQUET = PROCESSED_DIR / "face_embeddings.parquet"   # per-image 512-d
 FACE_FEATURES_PARQUET = PROCESSED_DIR / "face_features.parquet"       # per-patient 1024-d
+CLEANED_US_CSV = PROCESSED_DIR / "cleaned_ultrasound_features.csv"    # cleaned ultrasound table
 
 # Column-name prefixes (defined here so torch-free modules can reference them
 # without importing the embedding code, which pulls in torch).
