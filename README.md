@@ -17,6 +17,11 @@ point-of-care ultrasound measurements.
   hyomental distance ratio, within-fold mean imputation, L2 logistic regression
   + XGBoost under the same 5×2 CV, and permutation + XGBoost-gain feature
   importance. Manuscript Methods + Results stubs in `docs/manuscript.md`.
+- **Block C / Weeks 8–11 (done):** within-fold isotonic calibration of each
+  modality (Brier + reliability plots), late fusion (logistic meta-learner) with
+  an unweighted-average baseline and a sanity check, clinical comparators
+  (Mallampati/LEMON/Wilson) on the same folds, and DeLong tests with Bonferroni
+  correction. Manuscript Tables 1–4 in `docs/manuscript.md`.
 
 ## Quick start
 
@@ -127,6 +132,45 @@ make week67       # us-model (cleans features first)
   entirely missing across the cohort are dropped with a warning.
 - Same outcome (CL 3–4), same patient-level stratified 5×2 CV, and same class
   weighting (`class_weight` / `scale_pos_weight`) as the face model.
+
+## Block C / Weeks 8–11 — fusion & clinical comparison
+
+Run **after** the face features (`make week45`) exist; calibration rebuilds the
+cleaned ultrasound table itself.
+
+```bash
+make calibration          # isotonic-calibrate face & ultrasound (within-fold)
+make fusion               # logistic meta-learner + average baseline
+make clinical-comparison  # clinical baselines + DeLong tests
+make block-c              # all three, in order
+```
+
+Outputs (in `reports/`):
+- `calibrated_face_probs.csv`, `calibrated_us_probs.csv` — out-of-fold calibrated
+  probabilities, one row per patient per fold (`study_id, repeat, fold_index,
+  label, calibrated_prob`)
+- `calibration_metrics.csv` — Brier per fold + pooled; `face_calibration.png`,
+  `us_calibration.png` — reliability diagrams
+- `fused_model.pkl` — meta-learner refit on all OOF probs + metadata
+- `fusion_cv_metrics.csv`, `fusion_average_baseline_metrics.csv` — learned vs
+  average-baseline metrics; `fusion_roc.png`
+- `fusion_fold_predictions.csv` — per patient/fold: `face_prob, us_prob,
+  fused_prob, avg_prob, label`
+- `per_model_metrics.csv` — AUC + operating-point metrics for every model
+- `delong_comparisons.csv` — six DeLong tests (fused vs each comparator),
+  Bonferroni α = 0.0083
+
+Notes:
+- **Primary model per modality = L2 logistic regression** (calibrated); XGBoost
+  remains available in the standalone per-modality reports.
+- **No leakage:** one common cohort (face + ultrasound + label); folds generated
+  once and reused everywhere via the calibrated-prob fold membership. The
+  meta-learner trains only on training-fold calibrated probabilities.
+- Each step **fails clearly** if a prerequisite output is missing (e.g. fusion
+  requires the calibrated-prob CSVs).
+- On the synthetic data the learned fusion does not beat the average baseline
+  (both AUC = 1.00); the pipeline prints/persists a sanity-check **warning**
+  rather than failing.
 
 ## Assumptions (column names & paths)
 

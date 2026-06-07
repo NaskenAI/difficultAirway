@@ -1,0 +1,199 @@
+"""
+Block C / Week 11 — clinical comparison and DeLong tests.
+
+WHAT THIS DOES
+--------------
+1. Computes the bedside clinical comparators (Mallampati, LEMON, Wilson) for the
+   fusion cohort, reusing airway.scores.
+2. Evaluates every model on the SAME folds as the fusion model (read from
+   fusion_fold_predictions.csv): per-fold and pooled AUC, plus operating-point
+   metrics (sensitivity, specificity, PPV, NPV, accuracy, balanced accuracy, F1)
+   at deterministic thresholds.
+3. Runs six DeLong tests comparing the fused model against Mallampati, LEMON,
+   Wilson, the face model, the ultrasound model, and the average-probability
+   baseline, with a Bonferroni-adjusted alpha of 0.0083 (= 0.05 / 6).
+
+DETERMINISTIC OPERATING-POINT THRESHOLDS (documented)
+-----------------------------------------------------
+- Probability models (face, ultrasound, fused, average): threshold 0.5.
+- Mallampati: class >= 3 (scores.MALLAMPATI_DIFFICULT_CLASS).
+- LEMON:      score >= 2 (scores.LEMON_DIFFICULT_THRESHOLD).
+- Wilson:     score >= 2 (scores.WILSON_DIFFICULT_THRESHOLD).
+AUC uses the raw (continuous/ordinal) score; the threshold only sets the
+operating point for the sensitivity/specificity-type metrics.
+
+FOLD REUSE
+----------
+Folds are NOT regenerated here. The per-patient/per-fold rows come from
+fusion_fold_predictions.csv, which carries the calibration/fusion fold
+membership; clinical scores are joined on study_id. DeLong is run on one value
+per patient (probabilities averaged across the two CV repeats; clinical scores
+are constant per patient).
+
+OUTPUTS (reports/)
+------------------
+  per_model_metrics.csv, delong_comparisons.csv
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+from sklearn.metrics import roc_auc_score
+
+from airway import config, delong, fusion, scores
+from airway.baseline_model import _classification_metrics
+
+BONFERRONI_ALPHA = 0.0083   # 0.05 / 6 comparisons
+
+PER_MODEL_CSV = config.REPORTS_DIR / "per_model_metrics.csv"
+DELONG_CSV = config.REPORTS_DIR / "delong_comparisons.csv"
+
+# model column -> (operating-point threshold, display name)
+PROB_THRESHOLD = 0.5
+SCORE_COLS = {
+    "mallampati_class": scores.MALLAMPATI_DIFFICULT_CLASS,
+    "lemon_score": scores.LEMON_DIFFICULT_THRESHOLD,
+    "wilson_score": scores.WILSON_DIFFICULT_THRESHOLD,
+}
+
+
+def _load_fold_rows() -> pd.DataFrame:
+    """Fusion fold predictions joined with the clinical comparator scores."""
+    if not fusion.FUSION_FOLD_PRED_CSV.exists():
+        raise FileNotFoundError(
+            f"clinical_comparison: {fusion.FUSION_FOLD_PRED_CSV} not found. "
+            f"Run `python -m airway.fusion` first."
+        )
+    rows = pd.read_csv(fusion.FUSION_FOLD_PRED_CSV)
+
+    from airway import loaders
+    comp = scores.compute_comparator_scores(loaders.preop_loader())
+    keep = [config.ID_COL] + list(SCORE_COLS)
+    missing = [c for c in keep if c not in comp.columns]
+    if missing:
+        raise ValueError(f"clinical_comparison: comparator score columns missing: {missing}")
+    merged = rows.merge(comp[keep], on=config.ID_COL, how="left")
+    return merged
+
+
+def _metrics_at_threshold(y_true, score, threshold) -> dict:
+    """Operating-point metrics treating (score >= threshold) as the positive call."""
+    y_pred = (np.asarray(score) >= threshold).astype(int)
+    # reuse the shared metric core by passing the hard call as a 0/1 "probability"
+    m = _classification_metrics(np.asarray(y_true), y_pred.astype(float))
+    sens, spec, ppv = m["sensitivity"], m["specificity"], m["ppv"]
+    m["balanced_accuracy"] = 0.5 * (sens + spec)
+    m["f1"] = (2 * ppv * sens / (ppv + sens)) if (ppv + sens) else 0.0
+    return m
+
+
+def _per_model_row(fold_rows: pd.DataFrame, col: str, threshold: float,
+                   modality: str) -> dict:
+    """Per-fold AUC (mean±SD) + pooled operating-point metrics for one model."""
+    per_fold_auc = []
+    for _, grp in fold_rows.groupby(["repeat", "fold_index"]):
+        sub = grp.dropna(subset=[col])
+        y = sub[config.LABEL_COL].to_numpy()
+        if len(sub) and len(np.unique(y)) == 2:
+            per_fold_auc.append(roc_auc_score(y, sub[col].to_numpy()))
+
+    pooled = fold_rows.dropna(subset=[col])
+    y_all = pooled[config.LABEL_COL].to_numpy()
+    auc_pooled = (roc_auc_score(y_all, pooled[col].to_numpy())
+                  if len(np.unique(y_all)) == 2 else float("nan"))
+    m = _metrics_at_threshold(y_all, pooled[col].to_numpy(), threshold)
+    return {
+        "model": modality,
+        "n": int(pooled[config.ID_COL].nunique()),
+        "auc_mean": round(float(np.mean(per_fold_auc)) if per_fold_auc else auc_pooled, 4),
+        "auc_std": round(float(np.std(per_fold_auc)) if per_fold_auc else 0.0, 4),
+        "auc_pooled": round(auc_pooled, 4),
+        "threshold": threshold,
+        "sensitivity": round(m["sensitivity"], 4),
+        "specificity": round(m["specificity"], 4),
+        "ppv": round(m["ppv"], 4),
+        "npv": round(m["npv"], 4),
+        "accuracy": round(m["accuracy"], 4),
+        "balanced_accuracy": round(m["balanced_accuracy"], 4),
+        "f1": round(m["f1"], 4),
+    }
+
+
+def per_model_metrics(fold_rows: pd.DataFrame) -> pd.DataFrame:
+    rows = [
+        _per_model_row(fold_rows, "face_prob", PROB_THRESHOLD, "face"),
+        _per_model_row(fold_rows, "us_prob", PROB_THRESHOLD, "ultrasound"),
+        _per_model_row(fold_rows, "fused_prob", PROB_THRESHOLD, "fusion:logreg"),
+        _per_model_row(fold_rows, "avg_prob", PROB_THRESHOLD, "fusion:average"),
+    ]
+    for col, thr in SCORE_COLS.items():
+        rows.append(_per_model_row(fold_rows, col, thr, col.replace("_class", "").replace("_score", "")))
+    return pd.DataFrame(rows)
+
+
+def _per_patient(fold_rows: pd.DataFrame) -> pd.DataFrame:
+    """One row per patient: probs averaged across repeats; scores are constant."""
+    agg = {c: "mean" for c in ["face_prob", "us_prob", "fused_prob", "avg_prob",
+                               *SCORE_COLS]}
+    agg[config.LABEL_COL] = "first"
+    return fold_rows.groupby(config.ID_COL, as_index=False).agg(agg)
+
+
+def delong_comparisons(fold_rows: pd.DataFrame) -> pd.DataFrame:
+    """Six DeLong tests: fused model vs each comparator (one value per patient)."""
+    pp = _per_patient(fold_rows)
+    comparators = [
+        ("mallampati", "mallampati_class"),
+        ("lemon", "lemon_score"),
+        ("wilson", "wilson_score"),
+        ("face", "face_prob"),
+        ("ultrasound", "us_prob"),
+        ("average", "avg_prob"),
+    ]
+    rows = []
+    for name, col in comparators:
+        sub = pp.dropna(subset=["fused_prob", col])
+        y = sub[config.LABEL_COL].to_numpy()
+        if len(np.unique(y)) < 2:
+            rows.append({"comparison": f"fused_vs_{name}", "reference": "fused_prob",
+                         "comparator": col, "n": int(len(sub)),
+                         "auc_fused": float("nan"), "auc_comparator": float("nan"),
+                         "auc_diff": float("nan"), "z": float("nan"),
+                         "p_value": float("nan"), "alpha_bonferroni": BONFERRONI_ALPHA,
+                         "significant": False})
+            continue
+        res = delong.delong_test(y, sub["fused_prob"].to_numpy(), sub[col].to_numpy())
+        rows.append({
+            "comparison": f"fused_vs_{name}", "reference": "fused_prob",
+            "comparator": col, "n": int(len(sub)),
+            "auc_fused": round(res["auc_1"], 4), "auc_comparator": round(res["auc_2"], 4),
+            "auc_diff": round(res["auc_diff"], 4), "z": round(res["z"], 4),
+            "p_value": round(res["p_value"], 5), "alpha_bonferroni": BONFERRONI_ALPHA,
+            "significant": bool(res["p_value"] < BONFERRONI_ALPHA),
+        })
+    return pd.DataFrame(rows)
+
+
+def main() -> None:
+    config.ensure_dirs()
+    fold_rows = _load_fold_rows()
+    print(f"clinical_comparison: {fold_rows[config.ID_COL].nunique()} patients, "
+          f"reusing {fold_rows.groupby(['repeat', 'fold_index']).ngroups} fusion folds.")
+
+    metrics = per_model_metrics(fold_rows)
+    metrics.to_csv(PER_MODEL_CSV, index=False)
+
+    comparisons = delong_comparisons(fold_rows)
+    comparisons.to_csv(DELONG_CSV, index=False)
+
+    print(f"\nper-model metrics -> {PER_MODEL_CSV}")
+    print(f"DeLong comparisons -> {DELONG_CSV}")
+    print(f"(Bonferroni alpha = {BONFERRONI_ALPHA} for 6 comparisons)\n")
+    print(metrics.to_string(index=False))
+    print("\nDeLong (fused vs comparator):")
+    print(comparisons.to_string(index=False))
+
+
+if __name__ == "__main__":
+    main()
