@@ -32,6 +32,12 @@ dev = [
     "black==24.4.2",
     "pre-commit==3.7.1",
 ]
+# Optional: enables dlib 68-point landmark alignment in face_crops.py. Needs a
+# C++ toolchain (cmake) to build, plus the model file (see README). Without it,
+# face_crops falls back to OpenCV eye/face detection automatically.
+face-dlib = [
+    "dlib==20.0.1",
+]
 
 [tool.black]
 line-length = 100

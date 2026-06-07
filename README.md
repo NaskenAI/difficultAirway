@@ -8,6 +8,11 @@ point-of-care ultrasound measurements.
 - **Week 1 (done):** project skeleton, data loaders, patient-level CV splitter, tests.
 - **Week 2 (done):** face alignment, ResNet-18 embeddings, ultrasound feature
   table, baseline logistic-regression model with cross-validated metrics.
+- **Week 3 (done):** data audit report, frozen quarantine rules, and computed
+  Mallampati / LEMON / Wilson comparator baselines.
+- **Weeks 4–5 (done):** dlib eye-centred face crops (persisted, idempotent),
+  persisted 512-d per-image embeddings → 1024-d per-patient features, and two
+  face classifiers (L2 logistic regression + XGBoost) under patient-level 5×2 CV.
 
 ## Quick start
 
@@ -31,6 +36,83 @@ make pilot-report
 - `reports/baseline_metrics.csv` — AUC, sensitivity, specificity per modality
 - `reports/baseline_roc.png` — ROC curves
 - `data/processed/face_features.parquet`, `ultrasound_features.parquet`
+
+## Week 3 — data audit
+
+```bash
+make quarantine   # freeze the cohort rules  -> reports/quarantine_rules.md
+                  #                              data/processed/quarantine_decisions.json
+make audit        # one-page audit           -> reports/data_audit_report.md
+make scores       # comparator baselines     -> reports/computed_baselines.csv
+make week3        # all three, in order
+```
+
+- **`quarantine`** is the single source of truth for which patients/images are
+  excluded and which ultrasound cells get imputed. The decisions are written to
+  `quarantine_decisions.json`; the crop and embedding steps read that file so the
+  cohort never silently diverges. Edit the rule constants at the top of
+  `src/airway/quarantine.py` to change them, then re-run.
+- **`scores`** computes Mallampati, LEMON and Wilson deterministically from the
+  pre-op fields (`data/raw/preop.csv`). Clinical cut-points are constants at the
+  top of `src/airway/scores.py`.
+- **`audit`** reports per-modality usability, missingness, CL-grade distribution,
+  demographics, and inter-observer Cohen's κ (only if a second-observer column is
+  present).
+
+## Weeks 4–5 — face model
+
+```bash
+make crops        # eye-centred 224x224 crops -> data/processed/face_crops/   (idempotent)
+make embeddings   # 512-d per image + 1024-d per patient -> data/processed/*.parquet
+make face-model   # train + 5x2 CV LogReg & XGBoost
+make week45       # all three, in order
+```
+
+`make face-model` writes `reports/face_model.pkl`, `reports/face_cv_metrics.csv`,
+and `reports/face_roc.png`.
+
+- **Crops are idempotent:** existing crops are skipped. Force a rebuild with
+  `python -m airway.face_crops --force`.
+- **Embeddings are computed once** (frozen ResNet-18, leakage-free) and cached to
+  parquet; supervised model fitting happens *inside* each CV fold.
+- **`--force`** on `python -m airway.face_embeddings` recomputes the cached parquet.
+
+### dlib alignment (optional)
+
+`face_crops` uses dlib 68-point landmarks for eye-centred alignment when both
+dlib **and** the landmark model are available, and **falls back to OpenCV**
+otherwise (a message prints which backend is active). To enable dlib:
+
+```bash
+pip install ".[face-dlib]"      # needs cmake + a C++ toolchain
+mkdir -p models
+curl -L http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2 \
+  | bunzip2 > models/shape_predictor_68_face_landmarks.dat
+```
+
+The model path is `config.DLIB_LANDMARK_MODEL` (`models/…` by default, git-ignored).
+
+### macOS note (XGBoost)
+
+XGBoost needs the OpenMP runtime. If `import xgboost` fails with a `libomp.dylib`
+error, run `brew install libomp`.
+
+## Assumptions (column names & paths)
+
+The code reads these names; rename your real columns to match **inside the
+loaders**, not throughout the codebase:
+
+- **Outcome:** `cl_grade` (1–4); difficult = CL 3–4 → `label`. Optional second
+  observer `cl_grade_obs2` enables inter-observer κ.
+- **Ultrasound** (`data/raw/ultrasound.csv`): `dstvc_mm`, `hmd_neutral_mm`,
+  `hmd_extended_mm`, `dse_mm` (+ derived `hmdr`).
+- **Pre-op / demographics** (`data/raw/preop.csv`): `age_years`, `sex`, `bmi`,
+  `mallampati_class`, `mouth_opening_mm`, `thyromental_mm`, `neck_movement_deg`,
+  `jaw_subluxation`, `buck_teeth`, `obstructed_airway`, `weight_class`,
+  `head_neck_class`, `receding_mandible`. Every pre-op column is optional — a
+  missing column makes the dependent score component `NaN` (never silently 0).
+- **Faces** (`data/raw/face_index.csv`): `study_id`, `view_code`, `file_path`
+  (relative to `data/raw/face_images/`). Multiple images per patient.
 
 ## Repository layout
 
