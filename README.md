@@ -23,11 +23,15 @@ point-of-care ultrasound measurements.
   (Mallampati/LEMON/Wilson) on the same folds, and DeLong tests with Bonferroni
   correction. Manuscript Tables 1–4 in `docs/manuscript.md`.
 - **Block D / Weeks 12–14 (coding done):** patient-level bootstrap 95% CIs,
-  descriptive subgroup analyses (BMI/age tertiles, surgery type) with
-  underpowered flags, SHAP explainability + per-case force plots, automatic
-  TP/TN/FP/FN case selection, FN/FP export tables for manual review, and a
-  data-freeze memo **template**. Clinical interpretation, the data-freeze
-  decision, repo tagging, and MLflow freezing are intentionally left to a human.
+  descriptive subgroup AUC (sex, BMI/age tertiles), SHAP on the ultrasound
+  XGBoost (+ face logistic coefficients), per-patient TP/TN/FP/FN error tables
+  for manual review, and a data-freeze memo **template**. Clinical
+  interpretation, the data-freeze decision, repo tagging, and MLflow freezing
+  are intentionally left to a human.
+- **Block E (extras, done):** a bedside-variables-only clinical-baseline model
+  (added as a 7th DeLong comparator with a dynamic Bonferroni denominator),
+  ultrasound inter-rater **ICC(2,1)** in the data audit, and **decision-curve
+  analysis** (net benefit) for the fused model vs the best bedside score.
 
 ## Quick start
 
@@ -180,42 +184,54 @@ Notes:
 
 ## Block D / Weeks 12–14 — validation & explainability (coding only)
 
-Run **after** Block C (these steps read `reports/fusion_fold_predictions.csv`
-and `reports/fused_model.pkl`).
+Run **after** Block C (these steps read `reports/fusion_fold_predictions.csv`,
+`reports/fused_model.pkl`, `reports/us_model.pkl`, and
+`reports/per_model_metrics.csv`).
 
 ```bash
-make bootstrap-ci      # patient-level bootstrap 95% CIs for all metrics
-make subgroups         # descriptive subgroup metrics + effect sizes
-make explainability    # SHAP summary + case selection + force plots
-make error-analysis    # FN / FP tables for manual review
-make data-freeze       # data-freeze memo TEMPLATE
-make block-d           # all five, in order
+make bootstrap         # patient-level bootstrap 95% CIs for all metrics
+make explain           # SHAP (ultrasound XGBoost) + face logistic coefficients
+make errors            # per-patient TP/TN/FP/FN error analysis
+make subgroups         # descriptive subgroup AUC of the fused model
+make clinical-baseline # bedside-variables-only logistic comparator
+make decision-curve    # net-benefit decision-curve analysis
+make block-d           # all six, in order
+make data-freeze       # data-freeze memo TEMPLATE (standalone)
 ```
 
-Outputs:
-- `reports/bootstrap_metric_cis.csv` — per model × metric: estimate, 95% CI,
-  valid-iteration count (1000 patient-level resamples, fixed seed)
-- `reports/subgroup_metrics.csv`, `reports/subgroup_effect_sizes.csv` —
-  descriptive only; small subgroups flagged `underpowered` (no hypothesis tests)
-- `reports/shap_summary_fused.png`, `reports/explainability_feature_summary.csv`
-  — SHAP on the fused inputs (falls back to standardised LR coefficients if SHAP
-  is unavailable)
-- `reports/explanation_case_selection.csv` — up to two each of TP/TN/FP/FN
-- `outputs/explainability/force_plots/*.png` — per-case SHAP force plots, or
-  `outputs/explainability/force_plot_notes.md` if they cannot be generated
-- `reports/false_negatives_for_manual_review.csv`,
-  `reports/false_positives_for_manual_review.csv` — full per-patient context
-- `reports/data_freeze_memo_TEMPLATE.md` — placeholders only; **not** a freeze
+Outputs (in `reports/`):
+- `bootstrap_ci.csv` — per model (face/us/fused/average) × metric (AUC, sens,
+  spec, PPV, NPV): point estimate, 95% CI, valid-iteration count (1000
+  patient-level resamples, fixed seed)
+- `shap_ultrasound_summary.png`, `shap_ultrasound_importance.csv` — SHAP
+  (TreeExplainer) on the ultrasound XGBoost; `face_importance.csv` — top-30
+  absolute logistic coefficients of the face model
+- `error_analysis.csv` + `error_analysis_summary.md` — every patient's
+  TP/TN/FP/FN category with demographics + CL grade; the FN/FP tables for review
+- `subgroup_auc.csv` — fused-model AUC by sex and BMI/age tertile
+  (descriptive/exploratory; small per-subgroup n)
+- `clinical_baseline_probs.csv`, `clinical_baseline_metrics.csv` — the
+  bedside-only model's out-of-fold probabilities and metrics (fixed 0.5 + Youden)
+- `decision_curve.csv`, `decision_curve.png` — net benefit for fused vs best
+  bedside vs treat-all / treat-none
+- `data_freeze_memo_TEMPLATE.md` — placeholders only; **not** a freeze
 
 Notes:
-- **SHAP is optional.** If `import shap` fails, the summary/force plots are
-  skipped, the feature summary falls back to standardised logistic coefficients,
-  and `force_plot_notes.md` records why — the pipeline never crashes.
+- **Clinical baseline** (`clinical_baseline.py`) is a pre-specified secondary
+  comparator: a logistic model on routine bedside variables only (age, sex, BMI,
+  Mallampati, thyromental distance when present), evaluated on the *same* folds.
+  It is added as a **7th DeLong comparator** in `clinical_comparison.py`, and the
+  Bonferroni denominator becomes dynamic (α = 0.05 / n_comparisons → 0.0071).
+  `make clinical-comparison` runs it first so the 7-way comparison is produced.
+- **Ultrasound inter-rater ICC(2,1)** is reported inside `make audit` when
+  second-observer `_obs2` ultrasound columns are present; otherwise the audit
+  prints "not available". No separate target.
+- **SHAP is required for `make explain`** (`shap` is pinned); the face view falls
+  back to coefficients and is skipped with a warning if `face_model.pkl` is absent.
 - **Patient-level units throughout:** the bootstrap resamples patients (not
   rows/images); per-patient probabilities are averaged across the CV repeats.
-- This block is **coding/automation only** — it produces tables, plots, and a
-  template. It does **not** tag the repo, freeze MLflow runs, or make the
-  data-freeze decision.
+- This block is **coding/automation only** — tables, plots, and a template. It
+  does **not** tag the repo, freeze MLflow runs, or make the data-freeze decision.
 
 ## Assumptions (column names & paths)
 
