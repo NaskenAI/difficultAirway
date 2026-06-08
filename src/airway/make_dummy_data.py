@@ -31,6 +31,7 @@ N_PATIENTS = 30          # small on purpose -- this is plumbing, not science
 IMAGES_PER_PATIENT = 6
 IMG_SIZE = 256           # pixels, square
 SEED = 0
+EMIT_US_OBS2 = True      # emit second-observer ultrasound columns (for ICC audit)
 
 
 def _make_fake_face(rng: np.random.Generator, difficult: bool) -> Image.Image:
@@ -139,6 +140,21 @@ def main() -> None:
     # to act on (quarantine.py imputes these inside cross-validation downstream)
     us_gap = rng.choice(N_PATIENTS, size=max(1, N_PATIENTS // 15), replace=False)
     ultrasound.loc[us_gap, "dse_mm"] = np.nan
+
+    # Optional second-observer ('_obs2') ultrasound readings for ~15% of patients,
+    # so the data audit can exercise the inter-rater ICC path. A SEPARATE rng is
+    # used so the primary measurements (and everything else) stay byte-identical.
+    if EMIT_US_OBS2:
+        obs2_rng = np.random.default_rng(20240607)
+        n_repeat = max(5, int(np.ceil(0.15 * N_PATIENTS)))   # ~15%, >= ICC minimum
+        repeat_idx = obs2_rng.choice(N_PATIENTS, size=n_repeat, replace=False)
+        for col in ["dstvc_mm", "hmd_neutral_mm", "hmd_extended_mm", "dse_mm"]:
+            vals = np.full(N_PATIENTS, np.nan)
+            primary = ultrasound[col].to_numpy()
+            # second reading = first + small measurement noise (high agreement)
+            vals[repeat_idx] = primary[repeat_idx] + obs2_rng.normal(0, 0.5, n_repeat)
+            ultrasound[f"{col}_obs2"] = np.round(vals, 1)
+
     ultrasound.to_csv(config.ULTRASOUND_CSV, index=False)
     print(f"wrote {config.ULTRASOUND_CSV}  ({len(ultrasound)} rows)")
 
