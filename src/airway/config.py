@@ -57,6 +57,11 @@ PREOP_CSV = RAW_DIR / "preop.csv"              # study_id, demographics + airway
 # ---------------------------------------------------------------------------
 REPORTS_DIR = PROJECT_ROOT / "reports"
 
+# Block D explainability artefacts (force plots, notes) live under outputs/.
+OUTPUTS_DIR = PROJECT_ROOT / "outputs"
+EXPLAIN_DIR = OUTPUTS_DIR / "explainability"
+FORCE_PLOTS_DIR = EXPLAIN_DIR / "force_plots"
+
 # ---------------------------------------------------------------------------
 # Cross-validation settings. Fixed seed = reproducible results.
 # ---------------------------------------------------------------------------
@@ -81,6 +86,14 @@ CL_GRADE_OBS2_COL = "cl_grade_obs2"
 # Rename your real columns to these names inside the loaders, NOT here.
 # ---------------------------------------------------------------------------
 DEMOGRAPHIC_COLS = ["age_years", "sex", "bmi"]
+
+# Surgery type (categorical). Used as a descriptive subgroup in Block D.
+SURGERY_TYPE_COL = "surgery_type"
+
+# Continuous variables that Block D splits into tertiles for subgroup analysis.
+TERTILE_SUBGROUP_COLS = ["bmi", "age_years"]
+# Categorical subgroup variables (reported as-is).
+CATEGORICAL_SUBGROUP_COLS = [SURGERY_TYPE_COL]
 
 # ---------------------------------------------------------------------------
 # Pre-operative airway-exam columns used to compute Mallampati / LEMON / Wilson.

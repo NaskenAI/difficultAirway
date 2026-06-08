@@ -19,3 +19,6 @@ reports/*.md
 
 # Large downloaded model weights (e.g. dlib 68-point landmarks, ~100MB)
 models/
+
+# Block D explainability artefacts (force plots, notes)
+outputs/

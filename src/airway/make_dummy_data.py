@@ -91,11 +91,18 @@ def main() -> None:
     d = is_difficult.astype(float)
     sex = rng.choice(["M", "F"], size=N_PATIENTS, p=[0.55, 0.45])
     bmi = (rng.normal(27, 4, N_PATIENTS) + 4.0 * d).round(1)
+    # surgery_type uses a SEPARATE rng so adding it does not perturb the main
+    # rng stream (labels, ultrasound, and face images stay byte-identical).
+    sep_rng = np.random.default_rng(12345)
+    surgery_type = sep_rng.choice(
+        ["general", "ent", "cardiac", "obstetric"],
+        size=N_PATIENTS, p=[0.5, 0.2, 0.15, 0.15])
     preop = pd.DataFrame({
         config.ID_COL: ids,
         "age_years": rng.integers(20, 80, size=N_PATIENTS),
         "sex": sex,
         "bmi": bmi,
+        config.SURGERY_TYPE_COL: surgery_type,
         # clinician Mallampati class: difficult patients skew toward 3-4
         "mallampati_class": np.clip(
             rng.choice([1, 2, 3, 4], size=N_PATIENTS, p=[0.35, 0.4, 0.18, 0.07])

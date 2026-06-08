@@ -2,7 +2,8 @@
 
 .PHONY: help install dummy test lint format check features pilot-report clean \
         audit quarantine scores crops embeddings face-model week3 week45 \
-        us-clean us-model week67 calibration fusion clinical-comparison block-c
+        us-clean us-model week67 calibration fusion clinical-comparison block-c \
+        bootstrap explain errors subgroups data-freeze block-d
 
 PYTHON ?= python3
 SRC_PATH := src
@@ -36,6 +37,13 @@ help:           ## Show this help
 	@echo "  make fusion              - late-fusion meta-learner + average baseline -> fused_model.pkl"
 	@echo "  make clinical-comparison - clinical baselines + DeLong tests -> delong_comparisons.csv"
 	@echo "  make block-c             - calibration + fusion + clinical-comparison"
+	@echo "  --- Block D / Weeks 12-14 (validation + explainability) ---"
+	@echo "  make bootstrap     - patient-level bootstrap 95% CIs -> bootstrap_ci.csv"
+	@echo "  make explain       - SHAP (ultrasound XGBoost) + face coefficients"
+	@echo "  make errors        - per-patient error analysis (TP/TN/FP/FN)"
+	@echo "  make subgroups     - descriptive subgroup AUC -> subgroup_auc.csv"
+	@echo "  make block-d       - bootstrap + explain + errors + subgroups"
+	@echo "  make data-freeze   - data-freeze memo TEMPLATE (reports/)"
 	@echo "  make clean         - remove caches and generated outputs"
 
 install:        ## Install common dependencies
@@ -106,9 +114,27 @@ clinical-comparison:  ## Clinical baselines + DeLong tests
 
 block-c: calibration fusion clinical-comparison   ## Run all of Block C (Weeks 8-11)
 
+bootstrap:      ## Patient-level bootstrap 95% confidence intervals
+	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m airway.bootstrap_ci
+
+explain:        ## SHAP (ultrasound XGBoost) + face logistic coefficients
+	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m airway.explainability
+
+errors:         ## Per-patient error analysis (TP/TN/FP/FN) for manual review
+	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m airway.error_analysis
+
+subgroups:      ## Descriptive subgroup AUC of the fused model
+	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m airway.subgroups
+
+data-freeze:    ## Generate the data-freeze memo TEMPLATE (reports/)
+	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m airway.data_freeze
+
+block-d: bootstrap explain errors subgroups   ## Run all of Block D (Weeks 12-14)
+
 clean:          ## Remove caches and generated outputs
 	rm -rf .pytest_cache .ruff_cache
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	rm -rf reports/*.csv reports/*.png reports/*.md reports/*.pkl
 	rm -rf data/processed/*.parquet data/processed/*.json data/processed/*.csv
 	rm -rf data/processed/face_crops
+	rm -rf outputs
