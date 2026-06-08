@@ -168,16 +168,27 @@ def per_model_metrics(fold_rows: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+ALPHA_FAMILYWISE = 0.05   # Bonferroni-corrected per-comparison alpha = this / n_comparisons
+
+
 def _per_patient(fold_rows: pd.DataFrame) -> pd.DataFrame:
     """One row per patient: probs averaged across repeats; scores are constant."""
-    agg = {c: "mean" for c in ["face_prob", "us_prob", "fused_prob", "avg_prob",
-                               *SCORE_COLS]}
+    candidate = ["face_prob", "us_prob", "fused_prob", "avg_prob",
+                 *SCORE_COLS, "clinical_prob"]
+    agg = {c: "mean" for c in candidate if c in fold_rows.columns}
     agg[config.LABEL_COL] = "first"
     return fold_rows.groupby(config.ID_COL, as_index=False).agg(agg)
 
 
 def delong_comparisons(fold_rows: pd.DataFrame) -> pd.DataFrame:
-    """Six DeLong tests: fused model vs each comparator (one value per patient)."""
+    """
+    DeLong tests: fused model vs each comparator (one value per patient).
+
+    The comparator set is the six core models plus, when its per-patient column
+    is present, the bedside clinical baseline (`clinical_prob`) — making seven
+    comparisons. The Bonferroni-adjusted alpha is ALPHA_FAMILYWISE / n_comparisons,
+    recomputed from the actual number of comparisons in the set.
+    """
     pp = _per_patient(fold_rows)
     comparators = [
         ("mallampati", "mallampati_class"),
@@ -187,6 +198,10 @@ def delong_comparisons(fold_rows: pd.DataFrame) -> pd.DataFrame:
         ("ultrasound", "us_prob"),
         ("average", "avg_prob"),
     ]
+    if "clinical_prob" in pp.columns:
+        comparators.append(("clinical_baseline", "clinical_prob"))
+
+    alpha = round(ALPHA_FAMILYWISE / len(comparators), 4)
     rows = []
     for name, col in comparators:
         sub = pp.dropna(subset=["fused_prob", col])
@@ -196,7 +211,7 @@ def delong_comparisons(fold_rows: pd.DataFrame) -> pd.DataFrame:
                          "comparator": col, "n": int(len(sub)),
                          "auc_fused": float("nan"), "auc_comparator": float("nan"),
                          "auc_diff": float("nan"), "z": float("nan"),
-                         "p_value": float("nan"), "alpha_bonferroni": BONFERRONI_ALPHA,
+                         "p_value": float("nan"), "alpha_bonferroni": alpha,
                          "significant": False})
             continue
         res = delong.delong_test(y, sub["fused_prob"].to_numpy(), sub[col].to_numpy())
@@ -205,8 +220,8 @@ def delong_comparisons(fold_rows: pd.DataFrame) -> pd.DataFrame:
             "comparator": col, "n": int(len(sub)),
             "auc_fused": round(res["auc_1"], 4), "auc_comparator": round(res["auc_2"], 4),
             "auc_diff": round(res["auc_diff"], 4), "z": round(res["z"], 4),
-            "p_value": round(res["p_value"], 5), "alpha_bonferroni": BONFERRONI_ALPHA,
-            "significant": bool(res["p_value"] < BONFERRONI_ALPHA),
+            "p_value": round(res["p_value"], 5), "alpha_bonferroni": alpha,
+            "significant": bool(res["p_value"] < alpha),
         })
     return pd.DataFrame(rows)
 
@@ -214,6 +229,17 @@ def delong_comparisons(fold_rows: pd.DataFrame) -> pd.DataFrame:
 def main() -> None:
     config.ensure_dirs()
     fold_rows = _load_fold_rows()
+
+    # Include the bedside clinical baseline as a comparator if it has been run.
+    cb_path = config.REPORTS_DIR / "clinical_baseline_probs.csv"
+    if cb_path.exists():
+        cb = pd.read_csv(cb_path)[[config.ID_COL, "repeat", "fold_index", "clinical_prob"]]
+        fold_rows = fold_rows.merge(cb, on=[config.ID_COL, "repeat", "fold_index"], how="left")
+        print("clinical_comparison: including clinical baseline as a 7th comparator.")
+    else:
+        print("clinical_comparison: clinical baseline not found "
+              "(run `make clinical-baseline`); using the six core comparators.")
+
     print(f"clinical_comparison: {fold_rows[config.ID_COL].nunique()} patients, "
           f"reusing {fold_rows.groupby(['repeat', 'fold_index']).ngroups} fusion folds.")
 
@@ -223,9 +249,11 @@ def main() -> None:
     comparisons = delong_comparisons(fold_rows)
     comparisons.to_csv(DELONG_CSV, index=False)
 
+    n_comp = len(comparisons)
+    alpha = comparisons["alpha_bonferroni"].iloc[0] if n_comp else float("nan")
     print(f"\nper-model metrics -> {PER_MODEL_CSV}")
     print(f"DeLong comparisons -> {DELONG_CSV}")
-    print(f"(Bonferroni alpha = {BONFERRONI_ALPHA} for 6 comparisons)\n")
+    print(f"(Bonferroni alpha = {alpha} for {n_comp} comparisons)\n")
     print(metrics.to_string(index=False))
     print("\nDeLong (fused vs comparator):")
     print(comparisons.to_string(index=False))

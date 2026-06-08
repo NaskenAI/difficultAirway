@@ -3,7 +3,8 @@
 .PHONY: help install dummy test lint format check features pilot-report clean \
         audit quarantine scores crops embeddings face-model week3 week45 \
         us-clean us-model week67 calibration fusion clinical-comparison block-c \
-        bootstrap explain errors subgroups data-freeze block-d
+        bootstrap explain errors subgroups data-freeze block-d \
+        clinical-baseline decision-curve
 
 PYTHON ?= python3
 SRC_PATH := src
@@ -42,7 +43,9 @@ help:           ## Show this help
 	@echo "  make explain       - SHAP (ultrasound XGBoost) + face coefficients"
 	@echo "  make errors        - per-patient error analysis (TP/TN/FP/FN)"
 	@echo "  make subgroups     - descriptive subgroup AUC -> subgroup_auc.csv"
-	@echo "  make block-d       - bootstrap + explain + errors + subgroups"
+	@echo "  make clinical-baseline - bedside-only logistic comparator -> clinical_baseline_*.csv"
+	@echo "  make decision-curve    - net-benefit decision-curve analysis -> decision_curve.{csv,png}"
+	@echo "  make block-d       - bootstrap + explain + errors + subgroups + clinical-baseline + decision-curve"
 	@echo "  make data-freeze   - data-freeze memo TEMPLATE (reports/)"
 	@echo "  make clean         - remove caches and generated outputs"
 
@@ -109,7 +112,10 @@ calibration:    ## Isotonic-calibrate the face and ultrasound models
 fusion:         ## Late-fusion meta-learner + average baseline
 	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m airway.fusion
 
-clinical-comparison:  ## Clinical baselines + DeLong tests
+clinical-baseline:  ## Bedside-variables-only logistic comparator
+	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m airway.clinical_baseline
+
+clinical-comparison: clinical-baseline  ## Clinical comparators + DeLong (incl. clinical baseline)
 	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m airway.clinical_comparison
 
 block-c: calibration fusion clinical-comparison   ## Run all of Block C (Weeks 8-11)
@@ -126,10 +132,13 @@ errors:         ## Per-patient error analysis (TP/TN/FP/FN) for manual review
 subgroups:      ## Descriptive subgroup AUC of the fused model
 	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m airway.subgroups
 
+decision-curve: ## Net-benefit decision-curve analysis (fused vs best bedside)
+	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m airway.decision_curve
+
 data-freeze:    ## Generate the data-freeze memo TEMPLATE (reports/)
 	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m airway.data_freeze
 
-block-d: bootstrap explain errors subgroups   ## Run all of Block D (Weeks 12-14)
+block-d: bootstrap explain errors subgroups clinical-baseline decision-curve   ## Run all of Block D (Weeks 12-14)
 
 clean:          ## Remove caches and generated outputs
 	rm -rf .pytest_cache .ruff_cache

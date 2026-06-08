@@ -23,6 +23,43 @@ import pandas as pd
 
 from airway import config, ultrasound_features
 
+# Second-observer ultrasound columns are named with this fixed suffix, e.g.
+# dstvc_mm_obs2. They are OPTIONAL repeat measurements; the ICC section is only
+# produced when at least one such column is present.
+US_OBS2_SUFFIX = "_obs2"
+MIN_ICC_PAIRS = 5          # need at least this many paired readings to report an ICC
+
+
+def icc_2_1(ratings: np.ndarray) -> float:
+    """
+    Intraclass correlation ICC(2,1): two-way random effects, single rater,
+    absolute agreement (Shrout & Fleiss). Input is an (n_subjects x k_raters)
+    array of complete (non-missing) ratings.
+
+    With mean squares from a two-way ANOVA — MSR (between subjects), MSC
+    (between raters), MSE (residual) — and k raters, n subjects:
+
+        ICC(2,1) = (MSR - MSE) / (MSR + (k-1)·MSE + (k/n)·(MSC - MSE))
+
+    Returns NaN if the design is degenerate (n<2, k<2, or zero denominator).
+    """
+    x = np.asarray(ratings, dtype=float)
+    if x.ndim != 2 or x.shape[0] < 2 or x.shape[1] < 2:
+        return float("nan")
+    n, k = x.shape
+    grand = x.mean()
+    ss_total = ((x - grand) ** 2).sum()
+    ss_rows = k * ((x.mean(axis=1) - grand) ** 2).sum()      # between subjects
+    ss_cols = n * ((x.mean(axis=0) - grand) ** 2).sum()      # between raters
+    ss_err = ss_total - ss_rows - ss_cols
+    msr = ss_rows / (n - 1)
+    msc = ss_cols / (k - 1)
+    mse = ss_err / ((n - 1) * (k - 1))
+    denom = msr + (k - 1) * mse + (k / n) * (msc - mse)
+    if denom == 0:
+        return float("nan")
+    return (msr - mse) / denom
+
 
 def _md_table(df: pd.DataFrame) -> str:
     """Render a small DataFrame as a GitHub-flavoured Markdown table."""
@@ -161,6 +198,36 @@ def _interobserver_kappa() -> dict | None:
     }
 
 
+def _ultrasound_icc() -> pd.DataFrame | None:
+    """
+    ICC(2,1) per ultrasound measurement that has a second-observer (`_obs2`)
+    column. Returns None when no `_obs2` columns exist at all (i.e. no repeat
+    measurements were collected), mirroring how the kappa block handles absence.
+    Features with fewer than MIN_ICC_PAIRS paired readings are listed as
+    "insufficient pairs".
+    """
+    if not config.ULTRASOUND_CSV.exists():
+        return None
+    df = pd.read_csv(config.ULTRASOUND_CSV)
+    measured = ultrasound_features.US_MEASURED_COLS
+    repeated = [c for c in measured
+                if c in df.columns and f"{c}{US_OBS2_SUFFIX}" in df.columns]
+    if not repeated:
+        return None
+
+    rows = []
+    for col in repeated:
+        pair = (df[[col, f"{col}{US_OBS2_SUFFIX}"]]
+                .apply(pd.to_numeric, errors="coerce").dropna())
+        n_pairs = len(pair)
+        if n_pairs >= MIN_ICC_PAIRS:
+            icc = round(float(icc_2_1(pair.to_numpy())), 3)
+        else:
+            icc = "insufficient pairs"
+        rows.append({"feature": col, "n_pairs": n_pairs, "ICC(2,1)": icc})
+    return pd.DataFrame(rows)
+
+
 def build_report() -> str:
     """Assemble the full Markdown audit report as a string."""
     usability = _usability_rates()
@@ -168,6 +235,7 @@ def build_report() -> str:
     cl_df, prevalence = _cl_distribution()
     demo = _demographics()
     kappa = _interobserver_kappa()
+    us_icc = _ultrasound_icc()
 
     parts = [
         "# Data Audit Report",
@@ -205,6 +273,19 @@ def build_report() -> str:
         parts.append("")
         parts.append("Quadratic-weighted kappa treats a 1-grade disagreement as "
                      "milder than a 3-grade one (appropriate for ordinal CL grades).")
+    parts.append("")
+
+    parts.append("## 6. Ultrasound inter-rater reliability (ICC 2,1)")
+    parts.append("")
+    if us_icc is None or us_icc.empty:
+        parts.append("_inter-rater ICC: not available (no repeat measurements "
+                     "collected)._")
+    else:
+        parts.append(_md_table(us_icc))
+        parts.append("")
+        parts.append("ICC(2,1): two-way random-effects, single-rater, absolute "
+                     "agreement; computed only for features with at least "
+                     f"{MIN_ICC_PAIRS} paired readings.")
     parts.append("")
     return "\n".join(parts)
 

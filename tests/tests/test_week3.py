@@ -138,3 +138,52 @@ def test_audit_kappa_present_when_second_observer_exists(have_data):
     k = data_audit._interobserver_kappa()
     assert k is not None
     assert -1.0 <= k["kappa_grade_quadratic"] <= 1.0
+
+
+# ===========================================================================
+# Week-12 extension: ultrasound inter-rater ICC(2,1)
+# ===========================================================================
+def test_icc_high_when_obs2_matches_obs1():
+    import numpy as np
+    rng = np.random.default_rng(0)
+    obs1 = rng.normal(40, 8, 20)
+    obs2 = obs1 + rng.normal(0, 0.3, 20)        # near-identical second reading
+    icc = data_audit.icc_2_1(np.column_stack([obs1, obs2]))
+    assert icc > 0.8
+
+
+def test_icc_low_when_obs2_is_noise():
+    import numpy as np
+    rng = np.random.default_rng(1)
+    obs1 = rng.normal(40, 8, 30)
+    obs2 = rng.normal(40, 8, 30)                # unrelated second reading
+    icc = data_audit.icc_2_1(np.column_stack([obs1, obs2]))
+    assert icc < 0.5
+
+
+def test_icc_in_sane_range():
+    import numpy as np
+    rng = np.random.default_rng(2)
+    x = rng.normal(0, 1, (15, 2))
+    icc = data_audit.icc_2_1(x)
+    assert -1.0 <= icc <= 1.0
+
+
+def test_ultrasound_icc_absent_returns_none(tmp_path, monkeypatch):
+    import pandas as pd
+    csv = tmp_path / "us_no_obs2.csv"
+    pd.DataFrame({
+        config.ID_COL: ["P1", "P2"],
+        "dstvc_mm": [18.0, 19.0], "hmd_neutral_mm": [45.0, 40.0],
+        "hmd_extended_mm": [55.0, 50.0], "dse_mm": [27.0, 25.0],
+    }).to_csv(csv, index=False)
+    monkeypatch.setattr(config, "ULTRASOUND_CSV", csv)
+    assert data_audit._ultrasound_icc() is None
+
+
+def test_audit_reports_icc_not_available_when_absent(monkeypatch):
+    # when no repeat measurements exist, the report still builds and says so
+    monkeypatch.setattr(data_audit, "_ultrasound_icc", lambda: None)
+    report = data_audit.build_report()
+    assert "Ultrasound inter-rater reliability (ICC 2,1)" in report
+    assert "not available" in report
