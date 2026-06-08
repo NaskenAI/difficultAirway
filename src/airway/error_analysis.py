@@ -1,65 +1,111 @@
 """
-Block D / Week 14 — error-analysis export (support for MANUAL review).
+Block D — error analysis for manual review.
 
 WHAT THIS DOES
 --------------
-Exports two tables for the clinician to review by hand: all false negatives and
-all false positives of the fused model (at threshold 0.5, one row per patient,
-probabilities averaged across CV repeats). Each row carries everything a
-reviewer needs in one place: patient id, the validation fold(s), true label,
-predicted probability/class, available demographics + surgery type, the clinical
-comparator scores, every modality probability, and the available ultrasound
-features.
+Classifies every patient as TP / TN / FP / FN from the fused model (one row per
+patient: fused_prob averaged across folds, thresholded at 0.5), joins back
+demographics (age, sex, BMI) and the Cormack-Lehane grade, and writes:
 
-This module ONLY assembles tables. It does no interpretation.
+  - error_analysis.csv          : every patient with its category + context
+  - error_analysis_summary.md   : category counts, plus the FALSE NEGATIVE and
+                                  FALSE POSITIVE tables (the clinically important
+                                  cases) rendered as markdown for hand review.
 
-OUTPUTS
--------
-reports/false_negatives_for_manual_review.csv
-reports/false_positives_for_manual_review.csv
+This module only assembles the cases; it does no clinical interpretation.
 """
 
 from __future__ import annotations
 
-from airway import config, predictions, ultrasound_features
+import numpy as np
+import pandas as pd
 
-FN_CSV = config.REPORTS_DIR / "false_negatives_for_manual_review.csv"
-FP_CSV = config.REPORTS_DIR / "false_positives_for_manual_review.csv"
+from airway import config, predictions
+
+THRESHOLD = 0.5
+OUT_CSV = config.REPORTS_DIR / "error_analysis.csv"
+OUT_MD = config.REPORTS_DIR / "error_analysis_summary.md"
+
+OUT_COLS = ["study_id", "label", "fused_prob", "predicted", "category",
+            "age_years", "sex", "bmi", "cl_grade"]
 
 
-def build_review_tables(threshold: float = predictions.DEFAULT_THRESHOLD):
-    """Return (false_negatives_df, false_positives_df), one row per patient."""
-    master = predictions.build_master_table()
-    pp = predictions.per_patient(master)
+def build_error_table() -> pd.DataFrame:
+    """One row per patient with predicted class, confusion category, and context."""
+    preds = predictions.load_fusion_predictions()
+    pp = predictions.per_patient(preds)[[config.ID_COL, "fused_prob", config.LABEL_COL]].copy()
+    pp["predicted"] = predictions.predicted_class(pp["fused_prob"], THRESHOLD)
+    pp["category"] = [predictions.confusion_category(int(y), int(p))
+                      for y, p in zip(pp[config.LABEL_COL], pp["predicted"])]
 
-    pp = pp.copy()
-    pp["predicted_class"] = predictions.predicted_class(pp["fused_prob"], threshold)
-    pp["error_type"] = [predictions.confusion_category(int(y), int(p))
-                        for y, p in zip(pp[config.LABEL_COL], pp["predicted_class"])]
-    pp = pp.rename(columns={"fused_prob": "predicted_prob"})
+    # demographics
+    from airway import loaders
+    preop = loaders.preop_loader()
+    demo = [c for c in ["age_years", "sex", "bmi"] if c in preop.columns]
+    if demo:
+        pp = pp.merge(preop[[config.ID_COL, *demo]], on=config.ID_COL, how="left")
 
-    demo_cols = [c for c in (config.DEMOGRAPHIC_COLS + [config.SURGERY_TYPE_COL])
-                 if c in pp.columns]
-    us_cols = [c for c in ultrasound_features.US_FEATURE_COLS if c in pp.columns]
-    ordered = ([config.ID_COL, "folds", config.LABEL_COL, "predicted_prob",
-                "predicted_class", "error_type"]
-               + demo_cols + predictions.SCORE_COLS
-               + ["face_prob", "us_prob", "avg_prob"] + us_cols)
-    ordered = [c for c in ordered if c in pp.columns]
+    # CL grade from labels
+    labels = loaders.label_loader()
+    if config.CL_GRADE_COL in labels.columns:
+        pp = pp.merge(labels[[config.ID_COL, config.CL_GRADE_COL]],
+                      on=config.ID_COL, how="left")
 
-    fn = pp[pp["error_type"] == "FN"][ordered].sort_values(config.ID_COL).reset_index(drop=True)
-    fp = pp[pp["error_type"] == "FP"][ordered].sort_values(config.ID_COL).reset_index(drop=True)
-    return fn, fp
+    pp = pp.rename(columns={config.LABEL_COL: "label"})
+    pp["fused_prob"] = pp["fused_prob"].round(4)
+    for col in OUT_COLS:
+        if col not in pp.columns:
+            pp[col] = np.nan
+    return pp[OUT_COLS].sort_values("study_id").reset_index(drop=True)
+
+
+def _write_summary(table: pd.DataFrame) -> None:
+    counts = table["category"].value_counts().to_dict()
+    fn = table[table["category"] == "FN"]
+    fp = table[table["category"] == "FP"]
+
+    def _md(df: pd.DataFrame) -> str:
+        if df.empty:
+            return "_none_"
+        head = "| " + " | ".join(df.columns) + " |"
+        sep = "| " + " | ".join("---" for _ in df.columns) + " |"
+        body = ["| " + " | ".join(str(v) for v in row) + " |"
+                for row in df.itertuples(index=False, name=None)]
+        return "\n".join([head, sep, *body])
+
+    lines = [
+        "# Error Analysis Summary",
+        "",
+        "_Cases for MANUAL clinical review. No interpretation is included._",
+        "",
+        "## Category counts",
+        "",
+        f"- True positives (TP): {counts.get('TP', 0)}",
+        f"- True negatives (TN): {counts.get('TN', 0)}",
+        f"- False positives (FP): {counts.get('FP', 0)}",
+        f"- False negatives (FN): {counts.get('FN', 0)}",
+        f"- Total patients: {len(table)}",
+        "",
+        "## False negatives (missed difficult airways)",
+        "",
+        _md(fn),
+        "",
+        "## False positives (flagged but not difficult)",
+        "",
+        _md(fp),
+        "",
+    ]
+    OUT_MD.write_text("\n".join(lines))
 
 
 def main() -> None:
     config.ensure_dirs()
-    fn, fp = build_review_tables()
-    fn.to_csv(FN_CSV, index=False)
-    fp.to_csv(FP_CSV, index=False)
-    print(f"false negatives -> {FN_CSV}  ({len(fn)} patients)")
-    print(f"false positives -> {FP_CSV}  ({len(fp)} patients)")
-    print("These tables are for MANUAL clinical review; no interpretation is included.")
+    table = build_error_table()
+    table.to_csv(OUT_CSV, index=False)
+    _write_summary(table)
+    counts = table["category"].value_counts().to_dict()
+    print(f"error analysis -> {OUT_CSV}  ({len(table)} patients: {counts})")
+    print(f"summary        -> {OUT_MD}")
 
 
 if __name__ == "__main__":

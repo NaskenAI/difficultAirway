@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, roc_curve
 
 from airway import config, delong, fusion, scores
 from airway.baseline_model import _classification_metrics
@@ -77,6 +77,24 @@ def _load_fold_rows() -> pd.DataFrame:
     return merged
 
 
+def youden_threshold(y_true, score) -> float:
+    """
+    Threshold that maximises Youden's J = sensitivity + specificity - 1, read
+    off the ROC curve. Returns NaN if only one outcome class is present (J is
+    undefined). The returned value lies within the range of `score`.
+    """
+    y_true = np.asarray(y_true)
+    score = np.asarray(score, dtype=float)
+    if len(np.unique(y_true)) < 2:
+        return float("nan")
+    fpr, tpr, thresholds = roc_curve(y_true, score)
+    j = tpr - fpr
+    best = thresholds[int(np.argmax(j))]
+    # sklearn prepends an +inf threshold; clamp into the observed score range
+    lo, hi = float(np.min(score)), float(np.max(score))
+    return float(min(max(best, lo), hi))
+
+
 def _metrics_at_threshold(y_true, score, threshold) -> dict:
     """Operating-point metrics treating (score >= threshold) as the positive call."""
     y_pred = (np.asarray(score) >= threshold).astype(int)
@@ -89,7 +107,7 @@ def _metrics_at_threshold(y_true, score, threshold) -> dict:
 
 
 def _per_model_row(fold_rows: pd.DataFrame, col: str, threshold: float,
-                   modality: str) -> dict:
+                   modality: str, threshold_type: str = "fixed_0.5") -> dict:
     """Per-fold AUC (mean±SD) + pooled operating-point metrics for one model."""
     per_fold_auc = []
     for _, grp in fold_rows.groupby(["repeat", "fold_index"]):
@@ -105,11 +123,12 @@ def _per_model_row(fold_rows: pd.DataFrame, col: str, threshold: float,
     m = _metrics_at_threshold(y_all, pooled[col].to_numpy(), threshold)
     return {
         "model": modality,
+        "threshold_type": threshold_type,
         "n": int(pooled[config.ID_COL].nunique()),
         "auc_mean": round(float(np.mean(per_fold_auc)) if per_fold_auc else auc_pooled, 4),
         "auc_std": round(float(np.std(per_fold_auc)) if per_fold_auc else 0.0, 4),
         "auc_pooled": round(auc_pooled, 4),
-        "threshold": threshold,
+        "threshold": round(float(threshold), 4),
         "sensitivity": round(m["sensitivity"], 4),
         "specificity": round(m["specificity"], 4),
         "ppv": round(m["ppv"], 4),
@@ -120,15 +139,32 @@ def _per_model_row(fold_rows: pd.DataFrame, col: str, threshold: float,
     }
 
 
+# probability models: (column, display name)
+PROB_MODELS = [
+    ("face_prob", "face"), ("us_prob", "ultrasound"),
+    ("fused_prob", "fusion:logreg"), ("avg_prob", "fusion:average"),
+]
+
+
 def per_model_metrics(fold_rows: pd.DataFrame) -> pd.DataFrame:
-    rows = [
-        _per_model_row(fold_rows, "face_prob", PROB_THRESHOLD, "face"),
-        _per_model_row(fold_rows, "us_prob", PROB_THRESHOLD, "ultrasound"),
-        _per_model_row(fold_rows, "fused_prob", PROB_THRESHOLD, "fusion:logreg"),
-        _per_model_row(fold_rows, "avg_prob", PROB_THRESHOLD, "fusion:average"),
-    ]
+    rows = []
+    # probability models at the fixed 0.5 threshold
+    for col, name in PROB_MODELS:
+        rows.append(_per_model_row(fold_rows, col, PROB_THRESHOLD, name, "fixed_0.5"))
+    # the same probability models at their Youden-optimal threshold (operating
+    # point chosen to maximise sensitivity + specificity - 1, pooled)
+    pooled = fold_rows
+    for col, name in PROB_MODELS:
+        sub = pooled.dropna(subset=[col])
+        thr = youden_threshold(sub[config.LABEL_COL].to_numpy(), sub[col].to_numpy())
+        if np.isnan(thr):
+            thr = PROB_THRESHOLD
+        rows.append(_per_model_row(fold_rows, col, thr, name, "youden"))
+    # clinical comparators keep their fixed clinical cut-points (unchanged)
     for col, thr in SCORE_COLS.items():
-        rows.append(_per_model_row(fold_rows, col, thr, col.replace("_class", "").replace("_score", "")))
+        rows.append(_per_model_row(fold_rows, col, thr,
+                                   col.replace("_class", "").replace("_score", ""),
+                                   "fixed_clinical"))
     return pd.DataFrame(rows)
 
 

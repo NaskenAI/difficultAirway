@@ -3,7 +3,7 @@
 .PHONY: help install dummy test lint format check features pilot-report clean \
         audit quarantine scores crops embeddings face-model week3 week45 \
         us-clean us-model week67 calibration fusion clinical-comparison block-c \
-        bootstrap-ci subgroups explainability error-analysis data-freeze block-d
+        bootstrap explain errors subgroups data-freeze block-d
 
 PYTHON ?= python3
 SRC_PATH := src
@@ -38,12 +38,12 @@ help:           ## Show this help
 	@echo "  make clinical-comparison - clinical baselines + DeLong tests -> delong_comparisons.csv"
 	@echo "  make block-c             - calibration + fusion + clinical-comparison"
 	@echo "  --- Block D / Weeks 12-14 (validation + explainability) ---"
-	@echo "  make bootstrap-ci    - patient-level bootstrap 95% CIs -> bootstrap_metric_cis.csv"
-	@echo "  make subgroups       - descriptive subgroup metrics + effect sizes"
-	@echo "  make explainability  - SHAP summary + case selection + force plots"
-	@echo "  make error-analysis  - FN/FP tables for manual review"
-	@echo "  make data-freeze     - data-freeze memo TEMPLATE"
-	@echo "  make block-d         - all Block D coding outputs"
+	@echo "  make bootstrap     - patient-level bootstrap 95% CIs -> bootstrap_ci.csv"
+	@echo "  make explain       - SHAP (ultrasound XGBoost) + face coefficients"
+	@echo "  make errors        - per-patient error analysis (TP/TN/FP/FN)"
+	@echo "  make subgroups     - descriptive subgroup AUC -> subgroup_auc.csv"
+	@echo "  make block-d       - bootstrap + explain + errors + subgroups"
+	@echo "  make data-freeze   - data-freeze memo TEMPLATE (reports/)"
 	@echo "  make clean         - remove caches and generated outputs"
 
 install:        ## Install common dependencies
@@ -114,22 +114,22 @@ clinical-comparison:  ## Clinical baselines + DeLong tests
 
 block-c: calibration fusion clinical-comparison   ## Run all of Block C (Weeks 8-11)
 
-bootstrap-ci:   ## Patient-level bootstrap 95% confidence intervals
+bootstrap:      ## Patient-level bootstrap 95% confidence intervals
 	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m airway.bootstrap_ci
 
-subgroups:      ## Descriptive subgroup metrics + effect sizes
-	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m airway.subgroups
-
-explainability: ## SHAP summary + case selection + force plots
+explain:        ## SHAP (ultrasound XGBoost) + face logistic coefficients
 	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m airway.explainability
 
-error-analysis: ## FN/FP tables for manual review
+errors:         ## Per-patient error analysis (TP/TN/FP/FN) for manual review
 	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m airway.error_analysis
 
-data-freeze:    ## Generate the data-freeze memo TEMPLATE
+subgroups:      ## Descriptive subgroup AUC of the fused model
+	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m airway.subgroups
+
+data-freeze:    ## Generate the data-freeze memo TEMPLATE (reports/)
 	PYTHONPATH=$(SRC_PATH) $(PYTHON) -m airway.data_freeze
 
-block-d: bootstrap-ci subgroups explainability error-analysis data-freeze   ## Run all of Block D (Weeks 12-14)
+block-d: bootstrap explain errors subgroups   ## Run all of Block D (Weeks 12-14)
 
 clean:          ## Remove caches and generated outputs
 	rm -rf .pytest_cache .ruff_cache

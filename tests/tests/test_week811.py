@@ -190,3 +190,27 @@ def test_delong_comparisons_has_six_rows(fold_rows):
     assert (comp["alpha_bonferroni"] == 0.0083).all()
     for col in ("auc_fused", "auc_comparator", "p_value", "significant"):
         assert col in comp.columns
+
+
+# ===========================================================================
+# Block D extension: Youden-optimal operating point
+# ===========================================================================
+def test_youden_threshold_within_score_range():
+    import numpy as np
+    y = np.array([0, 0, 0, 1, 1, 1, 0, 1])
+    s = np.array([0.1, 0.2, 0.35, 0.7, 0.8, 0.9, 0.3, 0.6])
+    thr = clinical_comparison.youden_threshold(y, s)
+    assert s.min() <= thr <= s.max()
+
+
+def test_youden_threshold_single_class_is_nan():
+    import numpy as np
+    assert np.isnan(clinical_comparison.youden_threshold([1, 1, 1], [0.2, 0.5, 0.8]))
+
+
+def test_per_model_metrics_has_both_threshold_types(fold_rows):
+    metrics = clinical_comparison.per_model_metrics(fold_rows)
+    assert "threshold_type" in metrics.columns
+    types = set(metrics["threshold_type"])
+    assert "fixed_0.5" in types
+    assert "youden" in types
